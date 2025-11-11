@@ -6,7 +6,7 @@ import json
 import os
 
 # 🔑 BOT TOKENİNİ BURADA DƏYİŞ
-bot = telebot.TeleBot("YOUR_BOT_TOKEN")
+bot = telebot.TeleBot("8529189956:AAEEvzQ5EuPZTJujev0Ox-KK1MGsbkMPdxc")
 
 DATA_FILE = "plans.json"
 
@@ -156,3 +156,4 @@ t.start()
 
 # Botu işə sal
 bot.polling()
+
