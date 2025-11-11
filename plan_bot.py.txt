@@ -1,0 +1,158 @@
+import telebot
+import threading
+from datetime import datetime, timedelta
+import time
+import json
+import os
+
+# 🔑 BOT TOKENİNİ BURADA DƏYİŞ
+bot = telebot.TeleBot("YOUR_BOT_TOKEN")
+
+DATA_FILE = "plans.json"
+
+# 📁 Fayldan planları yüklə
+def load_plans():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # datetime obyektlərinə çevir
+        for chat_id in data:
+            for p in data[chat_id]:
+                p['datetime'] = datetime.strptime(p['datetime'], "%Y-%m-%d %H:%M:%S")
+        return {int(k): v for k, v in data.items()}
+    return {}
+
+# 📁 Planları fayla yaz
+def save_plans():
+    serializable = {}
+    for chat_id, plist in plans.items():
+        serializable[str(chat_id)] = []
+        for p in plist:
+            p_copy = p.copy()
+            p_copy['datetime'] = p_copy['datetime'].strftime("%Y-%m-%d %H:%M:%S")
+            serializable[str(chat_id)].append(p_copy)
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(serializable, f, ensure_ascii=False, indent=4)
+
+# Planlar yüklənir
+plans = load_plans()
+
+# /start komandası
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.reply_to(message,
+    "👋 Salam! Mən sənin planlama botunam.\n\n"
+    "📌 Əmrlər:\n"
+    "/plan - yeni plan əlavə et\n"
+    "/planlar - planlarını göstər\n"
+    "/sil - planı sil\n\n"
+    "Plan əlavə etmək üçün /plan yaz.")
+
+# /plan komandası
+@bot.message_handler(commands=['plan'])
+def plan(message):
+    bot.reply_to(message, "✍️ Plan yaz:")
+    bot.register_next_step_handler(message, add_plan_text)
+
+def add_plan_text(message):
+    chat_id = message.chat.id
+    plan_text = message.text
+    if chat_id not in plans:
+        plans[chat_id] = []
+    new_plan = {'text': plan_text}
+    plans[chat_id].append(new_plan)
+    bot.reply_to(message, "📅 Tarix və saat yaz (məsələn: 14.11.2025 18:30)")
+    bot.register_next_step_handler(message, add_plan_datetime, new_plan)
+
+def add_plan_datetime(message, plan):
+    try:
+        plan_datetime = datetime.strptime(message.text, "%d.%m.%Y %H:%M")
+        plan['datetime'] = plan_datetime
+        bot.reply_to(message, "⏰ Nə qədər vaxt öncə xatırladım? (dəqiqə ilə yaz)")
+        bot.register_next_step_handler(message, add_reminder, plan)
+    except ValueError:
+        bot.reply_to(message, "⚠️ Format yalnışdır. Düzgün format: 14.11.2025 18:30\nYenidən yaz:")
+        bot.register_next_step_handler(message, add_plan_datetime, plan)
+
+def add_reminder(message, plan):
+    chat_id = message.chat.id
+    try:
+        remind_before = int(message.text)
+        plan['remind_before'] = remind_before
+        save_plans()  # yadda saxla
+        bot.reply_to(message,
+                     f"✅ Plan yadda saxlanıldı!\n\n"
+                     f"📋 {plan['text']}\n"
+                     f"📅 {plan['datetime'].strftime('%d.%m.%Y %H:%M')}\n"
+                     f"⏰ {remind_before} dəq öncə xəbər veriləcək.")
+    except ValueError:
+        bot.reply_to(message, "⚠️ Rəqəmlə yazmalısan (məsələn: 10)")
+        bot.register_next_step_handler(message, add_reminder, plan)
+
+# /planlar komandası
+@bot.message_handler(commands=['planlar'])
+def show_plans(message):
+    chat_id = message.chat.id
+    if chat_id not in plans or len(plans[chat_id]) == 0:
+        bot.reply_to(message, "📭 Heç bir plan yoxdur.")
+    else:
+        text = "🗓 Sənin planların:\n\n"
+        for idx, p in enumerate(plans[chat_id], 1):
+            text += (f"{idx}. 📋 {p['text']}\n"
+                     f"   📅 {p['datetime'].strftime('%d.%m.%Y %H:%M')}\n"
+                     f"   ⏰ {p['remind_before']} dəq öncə xəbər veriləcək.\n\n")
+        bot.reply_to(message, text)
+
+# /sil komandası
+@bot.message_handler(commands=['sil'])
+def delete_plan(message):
+    chat_id = message.chat.id
+    if chat_id not in plans or len(plans[chat_id]) == 0:
+        bot.reply_to(message, "🗑 Heç bir plan yoxdur.")
+    else:
+        text = "Silmək istədiyin planın nömrəsini yaz:\n\n"
+        for idx, p in enumerate(plans[chat_id], 1):
+            text += f"{idx}. {p['text']} ({p['datetime'].strftime('%d.%m.%Y %H:%M')})\n"
+        bot.reply_to(message, text)
+        bot.register_next_step_handler(message, confirm_delete)
+
+def confirm_delete(message):
+    chat_id = message.chat.id
+    try:
+        idx = int(message.text) - 1
+        if chat_id in plans and 0 <= idx < len(plans[chat_id]):
+            deleted_plan = plans[chat_id].pop(idx)
+            save_plans()
+            bot.reply_to(message, f"✅ Plan silindi:\n📋 {deleted_plan['text']}")
+        else:
+            bot.reply_to(message, "⚠️ Yanlış nömrə.")
+    except:
+        bot.reply_to(message, "⚠️ Rəqəmlə yazmalısan.")
+
+# 🔔 Xatırlatma mexanizmi
+def reminder_checker():
+    while True:
+        now = datetime.now()
+        for chat_id, user_plans in list(plans.items()):
+            for plan in list(user_plans):
+                if 'datetime' in plan and 'remind_before' in plan:
+                    reminder_time = plan['datetime'] - timedelta(minutes=plan['remind_before'])
+                    if reminder_time <= now < reminder_time + timedelta(seconds=30):
+                        try:
+                            bot.send_message(chat_id,
+                                             f"🔔 Xatırlatma vaxtıdır!\n\n"
+                                             f"📋 {plan['text']}\n"
+                                             f"📅 {plan['datetime'].strftime('%d.%m.%Y %H:%M')}")
+                            user_plans.remove(plan)
+                            save_plans()
+                        except Exception as e:
+                            print(f"Xəta: {e}")
+        time.sleep(20)
+
+# Thread işə düşür
+t = threading.Thread(target=reminder_checker)
+t.daemon = True
+t.start()
+
+# Botu işə sal
+bot.polling()
